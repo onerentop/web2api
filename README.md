@@ -1,93 +1,137 @@
 # Web2API
 
-一个基于 **FastAPI + Playwright + CDP** 的“Web2API”服务：通过**真实浏览器会话**访问站点，并以 **OpenAI 兼容**的接口形式对外提供 `/{type}/v1/chat/completions` 能力（按 `type` 插件化路由，例如 `claude`）。
+把“网页上的 AI 服务”包装成 **OpenAI 兼容接口**。
 
-> 适用场景：你已经有 OpenAI SDK / Cursor / 其它兼容 `/v1/chat/completions` 的客户端，希望把“网页端能力”以统一接口接入，并支持会话复用、工具调用（tool calls）等编排。
+如果你已经有：
 
-## 功能特性
+- 代理
+- 站点登录态（例如 Claude 的 `sessionKey`）
+- 想让 `OpenAI SDK`、`Cursor`、或者任何兼容 `/v1/chat/completions` 的客户端直接调用
 
-- **OpenAI 兼容接口**：`GET /{type}/v1/models`、`POST /{type}/v1/chat/completions`（支持 `stream`）。
-- **插件化**：通过 `core.plugin.base.AbstractPlugin` 扩展新的 `type`（同一套 API，不同实现；目前只实现了 claude 插件）。
-- **配置页 + 配置 API**：浏览器访问 `/config` 维护代理组与账号；或通过 `GET/PUT /api/config` 管理。
-- **会话复用**：大大加快响应速度。
-- **ReAct → tool_calls**：当请求里携带 `tools` 时，会把 ReAct 格式输出解析成 OpenAI `tool_calls`（便于 Cursor 等客户端执行工具）。
-- **Mock 服务**：`main_mock.py` 提供调试用 “Mock Claude API”，不消耗 token，便于联调 SSE/解析逻辑。
+那这个项目就是干这个的。
 
-## 依赖与环境
+当前仓库默认内置的是 `claude` 插件，也就是说你可以像调 OpenAI 一样去调 Claude 网页端。
 
-- Python：**3.12+**
-- 包管理/运行：推荐使用 [`uv`](https://github.com/astral-sh/uv)
-- 安装：[指纹浏览器](https://github.com/adryfish/fingerprint-chromium)
-- 安装虚拟屏幕（**仅 Linux / 无桌面环境服务器需要，可选**）：
-  - Ubuntu/Debian：`sudo apt update && sudo apt install -y xvfb`
-  - 使用虚拟屏幕启动服务示例：`xvfb-run -s "-screen 0 1920x1080x24" uv run python main.py`
+## 这个项目到底做了什么
+
+简单说，它在本地帮你做了这几件事：
+
+1. 启动一个真实浏览器
+2. 用你的代理和登录态打开网页
+3. 帮你维持网页会话
+4. 对外暴露一个 OpenAI 风格的 HTTP API
+
+你调用的是：
+
+```text
+POST /claude/v1/chat/completions
+```
+
+项目内部实际做的是：
+
+```text
+代理组 -> 浏览器 -> Claude tab -> 网页会话
+```
+
+## 适合谁
+
+适合下面这类场景：
+
+- 你已经有现成的 OpenAI 客户端，但想换成网页端 Claude
+- 你想让 Cursor 之类的工具接一个“看起来像 OpenAI”的后端
+- 你不想手写浏览器自动化细节，只想配好账号就能用
+
+如果你只是想“体验 Claude 网页”，这个项目不适合你；它更像一个给开发者用的桥接服务。
+
+## 新手先记住这 4 个概念
+
+- `代理组`
+  一组代理配置，对应一个浏览器进程。
+- `type`
+  某种站点能力。当前仓库默认是 `claude`。
+- `账号`
+  某个 `type` 的登录态。Claude 一般就是 `sessionKey`。
+- `会话`
+  一次聊天上下文。项目会尽量复用，重启后如果复用不了，就会自动新建并把历史对话重新发过去。
 
 ## 快速开始
 
-### 1）安装依赖
+### 1. 准备环境
+
+你需要先准备好：
+
+- Python `3.12+`
+- [`uv`](https://github.com/astral-sh/uv)
+- 指纹浏览器 `fingerprint-chromium`
+- 一个可用代理
+- 一个可用的 Claude `sessionKey`
+
+### 2. 安装依赖
 
 ```bash
 uv sync
 ```
 
-### 2）启动服务
+### 3. 检查 `config.yaml`
+
+项目根目录有一个 [config.yaml](/Users/caiwu/code/CDPDemo/config.yaml)，它主要控制：
+
+- 服务端口
+- 浏览器可执行文件路径
+- 调度与回收参数
+- mock 调试端口
+
+你至少要确认这一项是对的：
+
+```yaml
+browser:
+  chromium_bin: '/Applications/Chromium.app/Contents/MacOS/Chromium'
+```
+
+当前仓库示例端口是：
+
+```yaml
+server:
+  port: 9000
+```
+
+### 4. 启动服务
 
 ```bash
 uv run python main.py
 ```
 
-默认监听：`http://127.0.0.1:8001`
+如果启动成功，你会看到类似日志：
 
-- 配置页：`GET http://127.0.0.1:8001/config`
-- Types 列表：`GET http://127.0.0.1:8001/api/types`
-
-> 服务启动后如果提示“ 数据库无配置”，先去 `/config` 添加配置，或调用 `PUT /api/config` 写入。
-
-### 配置存储 `db.sqlite3`
-
-项目使用根目录下的 SQLite：`db.sqlite3` 保存配置（代理组 + 账号）。该文件通常包含敏感信息（代理密码、sessionKey），**不建议提交到公开仓库**。
-
-配置结构（与 `/api/config` 一致）：
-
-```json
-[
-  {
-    "proxy_host": "host:port",
-    "proxy_user": "user",
-    "proxy_pass": "pass",
-    "fingerprint_id": "4567",
-    "timezone": "America/Chicago",
-    "accounts": [
-      {
-        "name": "claude-01",
-        "type": "claude",
-        "auth": { "sessionKey": "YOUR_SESSION_KEY" }
-      }
-    ]
-  }
-]
+```text
+服务已就绪，已注册 type: claude
+Uvicorn running on http://127.0.0.1:9000
 ```
 
-说明：
+### 5. 打开配置页，填入代理和账号
 
-- `fingerprint_id`：用于隔离/复用浏览器上下文（指纹/用户数据目录等会按它组织）。
-- `accounts[].type`：必须是已注册的插件类型（可从 `/api/types` 获取）。
-- `accounts[].auth`：各插件自定义；Claude 插件需要 `sessionKey` 或 `session_key`。
+浏览器访问：
 
-## API 使用示例
-
-以下以 `type=claude` 为例（baseUrl 为 `http://127.0.0.1:8001/claude`）。
-
-### 列出模型
-
-```bash
-curl "http://127.0.0.1:8001/claude/v1/models"
+```text
+http://127.0.0.1:9000/config
 ```
 
-### 非流式 Chat Completions
+在里面填：
+
+- `proxy_host`
+- `proxy_user`
+- `proxy_pass`
+- `fingerprint_id`
+- 账号 `name`
+- 账号 `type=claude`
+- 账号 `auth.sessionKey`
+
+保存后立即生效。
+
+### 6. 发第一条请求
 
 ```bash
-curl -s "http://127.0.0.1:8001/claude/v1/chat/completions" \
+curl -s "http://127.0.0.1:9000/claude/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "s4",
@@ -98,10 +142,124 @@ curl -s "http://127.0.0.1:8001/claude/v1/chat/completions" \
   }'
 ```
 
-### 流式（SSE）
+## 最常见的两个“看起来像问题，其实是正常现象”
+
+### 1. 为什么日志里会看到 `create_conversation`？
+
+这是正常的。
+
+项目会优先复用旧会话；但如果是下面这些情况，就会新建一个远端会话：
+
+- 这是第一次聊天
+- 服务刚刚重启
+- 本地缓存已经失效
+- 旧会话对应的 tab/账号不可用了
+
+新建会话之后，项目会把你已有的聊天历史重新发给 Claude，所以你在网页上看到“新会话里带着旧记录”，这通常就是预期行为。
+
+### 2. 为什么日志里 `POST ... 200 OK` 会先出来？
+
+这对流式接口是正常的。
+
+因为服务先把 HTTP 响应头发给客户端，然后才一边和 Claude 网页通信、一边流式吐内容。
+
+## 配置到底存在哪里
+
+这里很多新人会搞混。
+
+### `config.yaml`
+
+这是“运行参数”，例如：
+
+- 端口
+- 浏览器路径
+- 调度并发
+- 回收周期
+
+### `db.sqlite3`
+
+这是“业务配置”，例如：
+
+- 代理组
+- 账号
+- auth
+- 账号冻结时间
+
+也就是说：
+
+- `config.yaml` 管程序怎么跑
+- `db.sqlite3` 管你有哪些代理和账号
+
+## 如果你写的是自己的客户端，请注意
+
+项目会把会话 ID 以**不可见字符**的形式附在 assistant 回复末尾。
+
+这意味着：
+
+- 如果你直接用 OpenAI SDK / Cursor，通常不用管
+- 如果你自己保存聊天记录，不要把 assistant 文本里的零宽字符清洗掉
+
+否则下一轮请求时，服务端可能没法继续复用会话。
+
+## FAQ
+
+### 为什么不直接封装网络数据包，而要打开一个真实浏览器？
+
+因为这个项目优先追求的是**稳定复用网页侧真实能力**，不是做一个“看起来更轻”的抓包转发器。
+
+直接封装网络包当然更省资源，但长期使用时通常有这些问题：
+
+- 登录态不只是一个固定 Cookie  
+  很多站点除了 `sessionKey`，还依赖浏览器里的本地存储、页面初始化状态、动态 token 等运行时上下文。
+
+- 前端协议不是静态不变的  
+  有些请求字段是前端 JS 在运行时组装的，站点一改前端逻辑，纯抓包方案就容易失效。
+
+- 更容易碰到风控  
+  真实浏览器天然更接近站点预期的访问行为；纯脚本直连接口更容易因为指纹、请求时序、上下文缺失而被拦。
+
+- 会话复用更自然  
+  这个项目需要长期维持网页会话、支持断点续聊、支持账号切换后的调度。浏览器方案更容易和网页端保持一致。
+
+- 调试成本更低  
+  出问题时可以直接看真实页面、真实登录态、真实请求环境，而不是只盯着抓包日志猜协议哪里变了。
+
+一句话说，这个项目是用更高的资源成本，换更强的稳定性、兼容性和可维护性。
+
+当然，浏览器方案也有代价：
+
+- 更吃内存
+- 冷启动更慢
+- 调度逻辑更复杂
+
+所以这不是最轻的方案，而是更适合“长期跑、尽量少因为站点变动而失效”的方案。
+
+## API 示例
+
+### 列出模型
 
 ```bash
-curl -N "http://127.0.0.1:8001/claude/v1/chat/completions" \
+curl "http://127.0.0.1:9000/claude/v1/models"
+```
+
+### 非流式
+
+```bash
+curl -s "http://127.0.0.1:9000/claude/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "s4",
+    "stream": false,
+    "messages": [
+      {"role":"user","content":"给我 3 条学习建议。"}
+    ]
+  }'
+```
+
+### 流式
+
+```bash
+curl -N "http://127.0.0.1:9000/claude/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "s4",
@@ -112,56 +270,78 @@ curl -N "http://127.0.0.1:8001/claude/v1/chat/completions" \
   }'
 ```
 
-## Mock 调试（可选）
+## 调试用 Mock
 
-启动 mock 服务：
+如果你暂时不想连真实 Claude，可以先启动 mock：
 
 ```bash
 uv run python main_mock.py
 ```
 
-默认端口：`8002`，并提供：
+然后把 [config.yaml](/Users/caiwu/code/CDPDemo/config.yaml) 里的这两项改成 mock 地址：
 
-- `GET http://127.0.0.1:8002/mock`（模拟站点入口页）
-- 一组与 Claude 插件调用格式兼容的 mock 接口（用于联调 SSE、解析器、工具调用等逻辑）
+```yaml
+claude:
+  start_url: 'http://127.0.0.1:8002/mock'
+  api_base: 'http://127.0.0.1:8002/mock'
+```
 
-让主服务指向 mock：
+这样主服务就会把请求打到本地 mock，而不是打到真实 Claude。
 
-- 在 `config.yaml` 中设置：
-  - `claude.start_url: "http://127.0.0.1:8002/mock"`
-  - `claude.api_base: "http://127.0.0.1:8002/mock"`
+## 这个项目现在支持什么
 
-然后再启动 `main.py`。
+当前仓库默认支持：
 
-> mock completion 请求到达时会在终端提示你输入多行“要回复的内容”，空行结束输入。
+- `claude`
 
-## 扩展新的 type（插件开发）
+项目本身是插件化的，后续可以继续扩展别的 `type`，但如果你刚开始使用，先把 Claude 跑通就行。
 
-1. 实现 `core.plugin.base.AbstractPlugin`（关注：`create_page` / `apply_auth` / `create_conversation` / `stream_completion` 等）。
-2. 在应用启动时注册插件（参考 `core.plugin.claude.register_claude_plugin()`）。
-3. 在配置中为该 `type` 添加账号，然后即可通过 `/{your_type}/v1/chat/completions` 调用。
+## 项目结构
 
-更细的架构说明见：`core/README.md`。
+你不需要一开始就看懂全部代码，先知道这些入口就够了：
 
-## 项目结构（简述）
+- [main.py](/Users/caiwu/code/CDPDemo/main.py)
+  主服务入口
+- [main_mock.py](/Users/caiwu/code/CDPDemo/main_mock.py)
+  mock 服务入口
+- [core/app.py](/Users/caiwu/code/CDPDemo/core/app.py)
+  应用组装
+- [core/api/](/Users/caiwu/code/CDPDemo/core/api)
+  OpenAI 兼容接口
+- [core/plugin/](/Users/caiwu/code/CDPDemo/core/plugin)
+  各种站点插件
+- [core/runtime/](/Users/caiwu/code/CDPDemo/core/runtime)
+  浏览器、tab、会话调度
 
-- `main.py`：启动 FastAPI 主服务（默认 `8001`）
-- `main_mock.py`：启动 Mock 服务（默认 `8002`）
-- `core/app.py`：应用组装（配置、账号池、会话缓存、浏览器管理、插件注册、路由挂载）
-- `core/api/`：OpenAI 兼容路由、ReAct/tool_calls 解析与 SSE 输出
-- `core/config/`：配置模型与 SQLite 持久化（`db.sqlite3`）
-- `core/plugin/`：插件接口与实现（默认含 Claude）
-- `core/runtime/`：浏览器/CDP/page 池、session 缓存等运行时组件
+如果你想看更底层的设计，再去读：
 
-## 开发与质量
+- [docs/architecture.md](/Users/caiwu/code/CDPDemo/docs/architecture.md)
+- [docs/page-pool-scheme.md](/Users/caiwu/code/CDPDemo/docs/page-pool-scheme.md)
+
+## 开发检查
 
 ```bash
 uv run ruff check .
 ```
 
-（如需格式化/更多检查，可在此基础上扩展 ruff 配置。）
+## 安全提醒
 
-## 安全与合规提示
+请不要把这些内容提交到公开仓库：
 
-- **不要把敏感信息提交到公开仓库**：如 `db.sqlite3`、代理账号密码、站点 `sessionKey`、抓包数据等。
-- 该项目通过真实浏览器访问第三方站点/接口，请确保你拥有合法使用权限，并遵守对应站点的条款与当地法律法规。
+- `db.sqlite3`
+- 代理账号密码
+- `sessionKey`
+- 抓包数据
+- 任何真实用户对话
+
+## 最后一句话
+
+如果你是第一次接触这个项目，最推荐的路径是：
+
+1. 先把 `config.yaml` 里的端口和浏览器路径改对
+2. 启动服务
+3. 去 `/config` 配一个 Claude 账号
+4. 用上面的 `curl` 发第一条消息
+5. 成功之后再去看架构文档
+
+先跑通，再读源码，会轻松很多。
