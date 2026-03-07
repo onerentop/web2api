@@ -37,6 +37,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     chromium_bin = (get("browser", "chromium_bin") or "").strip() or CHROMIUM_BIN
     headless = get_bool("browser", "headless", False)
+    no_sandbox = get_bool("browser", "no_sandbox", False)
+    disable_gpu = get_bool("browser", "disable_gpu", False)
+    disable_gpu_sandbox = get_bool("browser", "disable_gpu_sandbox", False)
     port_start = int(get("browser", "cdp_port_start") or 9223)
     port_count = int(get("browser", "cdp_port_count") or 20)
     port_range = (
@@ -49,6 +52,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     browser_manager = BrowserManager(
         chromium_bin=chromium_bin,
         headless=headless,
+        no_sandbox=no_sandbox,
+        disable_gpu=disable_gpu,
+        disable_gpu_sandbox=disable_gpu_sandbox,
         port_range=port_range,
     )
     app.state.chat_handler = ChatHandler(

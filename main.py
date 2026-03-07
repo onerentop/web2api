@@ -25,10 +25,11 @@ logging.basicConfig(
 
 
 def main() -> int:
+    host = str(get("server", "host") or "127.0.0.1").strip() or "127.0.0.1"
     port = int(get("server", "port") or 8001)
     uvicorn.run(
         "core.app:app",
-        host="127.0.0.1",
+        host=host,
         port=port,
         reload=False,
     )

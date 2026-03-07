@@ -56,13 +56,94 @@ POST /claude/v1/chat/completions
 
 ## 快速开始
 
+### Docker 一条命令启动
+
+如果你是在 `Linux` 服务器上部署，仓库根目录已经提供了 `Dockerfile` 和 `compose.yaml`。
+
+如果你用源码构建镜像，直接运行：
+
+```bash
+docker compose up -d --build
+```
+
+如果后面仓库已经发布了镜像，也可以直接一条命令拉起：
+
+```bash
+docker run -d \
+  --name web2api \
+  --restart unless-stopped \
+  --platform linux/amd64 \
+  --shm-size=1g \
+  -p 9000:9000 \
+  -v "$(pwd)/docker-data:/data" \
+  ghcr.io/caiwuu/web2api:latest
+```
+
+仓库推送到 `main` 或打 `v*` tag 后，GitHub Actions 会自动把镜像发布到 `GHCR`。
+
+如果你是在 `Apple Silicon` 的 Mac 上运行 Docker，也建议显式使用 `linux/amd64`，因为当前内置的 `fingerprint-chromium` 是 `x86_64 Linux` 版本。
+
+`macOS / Apple Silicon` 用户再注意 4 点：
+
+- 首次 `docker compose up -d --build` 会比较慢  
+  因为这里会下载浏览器、安装依赖，并且通过 `qemu` 运行 `linux/amd64` 镜像。
+- `compose.yaml` 里已经内置了 `platform: linux/amd64`  
+  正常情况下不需要你手动再改。
+- 如果你之前拉起过旧容器，建议直接重新构建  
+  用 `docker compose up -d --build`，不要只执行 `docker compose up -d`。
+- 启动后先看日志，再打开配置页  
+  用 `docker logs -f web2api`，看到 `服务已就绪` 后再访问页面。
+
+还有一个限制需要明确：
+
+- 当前内置的 `fingerprint-chromium` 是 `x86_64 Linux` 版本  
+  在 `Apple Silicon + Docker + linux/amd64(qemu)` 下，Chromium 可能出现 `connect_over_cdp ECONNREFUSED`、`Target page/context/browser has been closed`、`GPU process isn't usable` 这类崩溃。
+- 即使开启 `browser.disable_gpu=true` 和 `browser.disable_gpu_sandbox=true`，也不保证能彻底解决  
+  这两个参数更适合做容器兼容性调优，不是跨架构模拟环境下的根治方案。
+- 如果你要稳定使用，优先顺序建议是：  
+  `x86_64 Linux 宿主机 / x86_64 Linux VPS > macOS 本机源码运行 > Apple Silicon Docker`
+
+启动后：
+
+- API 地址：`http://127.0.0.1:9000`
+- 配置页：`http://127.0.0.1:9000/config`
+- 持久化目录：`./docker-data`
+
+容器首次启动时会自动把默认配置写到：
+
+- `./docker-data/config.yaml`
+
+默认镜像内已经包含：
+
+- `fingerprint-chromium`
+- `Xvfb`
+- 运行 Chromium 所需的 Linux 依赖
+
+如果想快速确认容器是否真的正常起来，可以直接执行：
+
+```bash
+docker compose ps
+docker logs --tail=200 web2api
+```
+
+正常情况下你会看到类似输出：
+
+```text
+INFO:     Started server process [1]
+INFO:     Waiting for application startup.
+服务已就绪，已注册 type: claude
+INFO:     Uvicorn running on http://0.0.0.0:9000
+```
+
+如果你不是用 Docker，再看下面的源码运行方式。
+
 ### 1. 准备环境
 
 你需要先准备好：
 
 - Python `3.12+`
 - [`uv`](https://github.com/astral-sh/uv)
-- 指纹浏览器 `fingerprint-chromium`
+- 指纹浏览器 [fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium)
 - 一个可用代理
 - 一个可用的 Claude `sessionKey`
 
@@ -116,6 +197,21 @@ xvfb-run -a -s "-screen 0 1920x1080x24" ./start.sh
 browser:
   chromium_bin: '/Applications/Chromium.app/Contents/MacOS/Chromium'
 ```
+
+如果你遇到浏览器在 Linux / Docker 环境里启动后立刻关闭，也可以先尝试这组兼容参数：
+
+```yaml
+browser:
+  no_sandbox: true
+  disable_gpu: true
+  disable_gpu_sandbox: true
+```
+
+注意：
+
+- 这更适合容器、Xvfb、远程桌面环境
+- 对本机桌面环境通常不需要
+- 对 `Apple Silicon Docker + x86_64 fingerprint-chromium`，这组参数也不保证稳定
 
 当前仓库示例端口是：
 

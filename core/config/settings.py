@@ -1,9 +1,12 @@
 """
-统一的 YAML 配置加载，所有配置直接从 config.yaml 读取。
+统一的 YAML 配置加载。
+
+默认读取项目根目录下的 config.yaml；若设置 WEB2API_CONFIG_PATH，则优先读取该路径。
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +14,17 @@ import yaml
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-_CONFIG_PATH = _PROJECT_ROOT / "config.yaml"
+_CONFIG_ENV_KEY = "WEB2API_CONFIG_PATH"
+
+
+def _resolve_config_path() -> Path:
+    configured = os.environ.get(_CONFIG_ENV_KEY, "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return _PROJECT_ROOT / "config.yaml"
+
+
+_CONFIG_PATH = _resolve_config_path()
 
 _config_cache: dict[str, Any] | None = None
 

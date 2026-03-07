@@ -3,6 +3,7 @@
 表结构：proxy_group, account（含 name, type, auth JSON）。
 """
 
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -11,10 +12,14 @@ from core.config.schema import AccountConfig, ProxyGroupConfig, account_from_row
 
 
 DB_FILENAME = "db.sqlite3"
+DB_PATH_ENV_KEY = "WEB2API_DB_PATH"
 
 
 def _get_db_path() -> Path:
     """专用 DB，与现有 account_pool.sqlite3 分离。"""
+    configured = os.environ.get(DB_PATH_ENV_KEY, "").strip()
+    if configured:
+        return Path(configured).expanduser()
     return Path(__file__).resolve().parent.parent.parent / DB_FILENAME
 
 

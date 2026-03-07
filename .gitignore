@@ -43,3 +43,4 @@ start_cf.sh
 proxy-auth-extension/
 
 db.sqlite3
+docker-data/
