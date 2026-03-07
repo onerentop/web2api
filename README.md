@@ -66,7 +66,7 @@ POST /claude/v1/chat/completions
 docker compose up -d --build
 ```
 
-如果后面仓库已经发布了镜像，也可以直接一条命令拉起：
+仓库已经发布镜像，也可以直接一条命令拉起：
 
 ```bash
 docker run -d \
