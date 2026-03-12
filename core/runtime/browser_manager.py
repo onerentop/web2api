@@ -19,7 +19,10 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Coroutine
+from typing import TYPE_CHECKING, Any, Callable, Coroutine
+
+if TYPE_CHECKING:
+    from core.runtime.local_proxy_forwarder import LocalProxyForwarder
 
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
@@ -89,6 +92,7 @@ class BrowserEntry:
     stderr_path: Path | None = None
     tabs: dict[str, TabRuntime] = field(default_factory=dict)
     last_used_at: float = field(default_factory=time.time)
+    proxy_forwarder: Any = None  # LocalProxyForwarder | None，仅 use_proxy 时非空
 
 
 @dataclass
@@ -194,8 +198,8 @@ class BrowserManager:
         proxy_key: ProxyKey,
         proxy_pass: str,
         port: int,
-    ) -> tuple[subprocess.Popen[Any], Path]:
-        """启动 Chromium 进程（代理 + 扩展），使用指定 port。"""
+    ) -> tuple[subprocess.Popen[Any], Path, LocalProxyForwarder | None]:
+        """启动 Chromium 进程（代理时使用本地转发鉴权，无扩展），使用指定 port。"""
         udd = user_data_dir(proxy_key.fingerprint_id)
         udd.mkdir(parents=True, exist_ok=True)
 
@@ -216,22 +220,29 @@ class BrowserManager:
             "--no-first-run",
             "--no-default-browser-check",
         ]
+        proxy_forwarder = None
         if proxy_key.use_proxy:
-            from proxy_extension_builder import generate_proxy_auth_extension
+            from core.runtime.local_proxy_forwarder import (
+                LocalProxyForwarder,
+                UpstreamProxy,
+                parse_proxy_server,
+            )
 
-            extension_path = generate_proxy_auth_extension(
-                proxy_user=proxy_key.proxy_user,
-                proxy_pass=proxy_pass,
-                fingerprint_id=proxy_key.fingerprint_id,
+            upstream_host, upstream_port = parse_proxy_server(proxy_key.proxy_host)
+            upstream = UpstreamProxy(
+                host=upstream_host,
+                port=upstream_port,
+                username=proxy_key.proxy_user,
+                password=proxy_pass,
             )
-            if not Path(extension_path).is_dir():
-                raise RuntimeError(f"扩展目录不存在: {extension_path}")
-            args.extend(
-                [
-                    f"--load-extension={extension_path}",
-                    f"--proxy-server=http://{proxy_key.proxy_host}",
-                ]
+            proxy_forwarder = LocalProxyForwarder(
+                upstream,
+                listen_host="127.0.0.1",
+                listen_port=0,
+                on_log=lambda msg: logger.debug("[proxy] %s", msg),
             )
+            proxy_forwarder.start()
+            args.append(f"--proxy-server={proxy_forwarder.proxy_url}")
         if self._headless:
             args.extend(
                 [
@@ -266,7 +277,7 @@ class BrowserManager:
             )
         finally:
             stderr_fp.close()
-        return proc, stderr_path
+        return proc, stderr_path, proxy_forwarder
 
     async def ensure_browser(
         self,
@@ -289,7 +300,9 @@ class BrowserManager:
                 "无可用 CDP 端口，当前并发浏览器数已达上限，请稍后重试或增大 cdp_port_count"
             )
         port = self._available_ports.pop()
-        proc, stderr_path = self._launch_process(proxy_key, proxy_pass, port)
+        proc, stderr_path, proxy_forwarder = self._launch_process(
+            proxy_key, proxy_pass, port
+        )
         logger.info(
             "已启动 Chromium PID=%s port=%s mode=%s headless=%s no_sandbox=%s disable_gpu=%s disable_gpu_sandbox=%s，等待 CDP 就绪...",
             proc.pid,
@@ -309,6 +322,11 @@ class BrowserManager:
         )
         if not ok:
             self._available_ports.add(port)
+            if proxy_forwarder is not None:
+                try:
+                    proxy_forwarder.stop()
+                except Exception:
+                    pass
             try:
                 proc.terminate()
                 proc.wait(timeout=5)
@@ -332,6 +350,11 @@ class BrowserManager:
             )
         except Exception:
             self._available_ports.add(port)
+            if proxy_forwarder is not None:
+                try:
+                    proxy_forwarder.stop()
+                except Exception:
+                    pass
             try:
                 proc.terminate()
                 proc.wait(timeout=5)
@@ -349,6 +372,11 @@ class BrowserManager:
         if context is None:
             await browser.close()
             self._available_ports.add(port)
+            if proxy_forwarder is not None:
+                try:
+                    proxy_forwarder.stop()
+                except Exception:
+                    pass
             try:
                 proc.terminate()
                 proc.wait(timeout=5)
@@ -362,6 +390,7 @@ class BrowserManager:
             browser=browser,
             context=context,
             stderr_path=stderr_path,
+            proxy_forwarder=proxy_forwarder,
         )
         return context
 
@@ -599,6 +628,11 @@ class BrowserManager:
             except Exception:
                 pass
         entry.tabs.clear()
+        if entry.proxy_forwarder is not None:
+            try:
+                entry.proxy_forwarder.stop()
+            except Exception as e:
+                logger.warning("关闭本地代理转发时异常: %s", e)
         if entry.browser is not None:
             try:
                 await entry.browser.close()
