@@ -40,8 +40,6 @@ start.sh
 start_mock.sh
 start_cf.sh
 
-proxy-auth-extension/
-
 db.sqlite3
 docker-data/
 config.local.yaml
